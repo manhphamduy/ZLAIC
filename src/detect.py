@@ -15,7 +15,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SIAMESE_MODEL_PATH = '../pretrained_models/best_siamese_model_mobilenet_v3.pth'
 
 # --- ĐƯỜNG DẪN ĐẾN THƯ MỤC CHA CHỨA TẤT CẢ VIDEO TEST ---
-PUBLIC_TEST_BASE_DIR = 'C:/Users/DELL/OneDrive/Desktop/ZaloAiChallenge/public_test/public_test/samples/'
+PUBLIC_TEST_BASE_DIR = '../public_test/public_test/samples/'
 
 # Đường dẫn lưu tất cả video kết quả
 OUTPUT_DIR = '../results/'
