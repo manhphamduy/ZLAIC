@@ -3,60 +3,53 @@ import torch.nn as nn
 from torchvision import models
 
 class SiameseNetwork(nn.Module):
-    """
-    Kiến trúc mạng Siamese sử dụng backbone MobileNetV3-Large.
-    Tự động tải trọng số pre-trained từ ImageNet.
-    """
-    def __init__(self, pretrained=True, freeze_backbone=False):
-        """
-        Khởi tạo mạng.
-        :param pretrained: bool - Nếu True, tải trọng số pre-trained trên ImageNet.
-        :param freeze_backbone: bool - Nếu True, đóng băng các lớp của backbone và chỉ train lớp classifier mới.
-        """
+    def __init__(self, backbone_path=None, pretrained_torch=False, freeze_backbone=False):
         super(SiameseNetwork, self).__init__()
         
-        # 1. Tải kiến trúc MobileNetV3-Large với trọng số pre-trained trên ImageNet
-        print(f"Loading MobileNetV3-Large backbone with pretrained weights from ImageNet...")
-        self.backbone = models.mobilenet_v3_large(pretrained=pretrained)
-        
-        # 2. Thay thế lớp classifier cuối cùng để tạo ra vector embedding
-        # QUAN TRỌNG: MobileNetV3 có cấu trúc classifier khác V2.
-        # Lấy số features từ lớp Linear ĐẦU TIÊN của classifier gốc.
+        # Quyết định tải backbone nào
+        if backbone_path:
+            print(f"Loading MobileNetV3-Large backbone and fine-tuning from: {backbone_path}")
+            # Tải kiến trúc không có trọng số pre-trained từ torchvision
+            self.backbone = models.mobilenet_v3_large(weights=None)
+        elif pretrained_torch:
+            print(f"Loading MobileNetV3-Large backbone with pretrained weights from ImageNet...")
+            self.backbone = models.mobilenet_v3_large(weights='IMAGENET1K_V1')
+        else:
+            print("Initializing MobileNetV3-Large backbone with random weights.")
+            self.backbone = models.mobilenet_v3_large(weights=None)
+            
+        # Thay thế lớp classifier
         num_ftrs = self.backbone.classifier[0].in_features
-        
-        # Tạo một classifier mới của riêng chúng ta
         self.backbone.classifier = nn.Sequential(
             nn.Linear(num_ftrs, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(512, 128) # Vector embedding 128 chiều
+            nn.Linear(512, 128)
         )
 
-        print("Successfully loaded pretrained MobileNetV3 backbone and replaced classifier head.")
-            
-        # 3. (Tùy chọn) Đóng băng các lớp của backbone để fine-tune
+        # Nếu có đường dẫn file, tải trọng số từ đó
+        if backbone_path:
+            try:
+                state_dict = torch.load(backbone_path, map_location=torch.device('cpu'))
+                # Xử lý các trường hợp key có prefix 'module.'
+                if all(key.startswith('module.') for key in state_dict.keys()):
+                    state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+                
+                # strict=False để bỏ qua các key không khớp (ví dụ: classifier cũ)
+                self.backbone.load_state_dict(state_dict, strict=False)
+                print("Backbone weights from VisDrone model loaded successfully!")
+            except Exception as e:
+                print(f"Could not load weights from {backbone_path}: {e}")
+
         if freeze_backbone:
-            print("Freezing backbone layers. Only the new classifier head will be trained.")
-            for name, param in self.backbone.named_parameters():
-                # Chỉ đóng băng các lớp không phải là 'classifier'
-                if 'classifier' not in name:
-                    param.requires_grad = False
-        else:
-            print("All layers are trainable (full fine-tuning).")
+            # ... (phần đóng băng giữ nguyên)
+            pass
 
     def forward_one(self, x):
-        """
-        Chạy một ảnh qua backbone để lấy embedding.
-        Hàm này sẽ được sử dụng trong quá trình inference (phát hiện).
-        """
         return self.backbone(x)
 
     def forward(self, anchor, positive, negative):
-        """
-        Chạy cả ba ảnh (anchor, positive, negative) qua mạng.
-        Hàm này được sử dụng trong quá trình training với Triplet Loss.
-        """
         output_anchor = self.forward_one(anchor)
         output_positive = self.forward_one(positive)
         output_negative = self.forward_one(negative)

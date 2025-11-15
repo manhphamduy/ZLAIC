@@ -13,20 +13,25 @@ from loss import TripletLoss
 # --- Cấu hình ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 PROCESSED_DATA_DIR = '../data/processed_rescue_data/'
-# THAY ĐỔI: Đổi tên file model output để phản ánh kiến trúc mới
-MODEL_SAVE_PATH = '../pretrained_models/best_siamese_model_mobilenet_v3.pth' 
+
+# --- ĐƯỜNG DẪN MỚI ---
+# 1. Đường dẫn đến model đã train trên VisDrone (backbone)
+VISDRONE_BACKBONE_PATH = '../pretrained_models/best_model.pth' # <-- SỬA TÊN FILE NÀY CHO ĐÚNG
+# 2. Tên file model Siamese cuối cùng sẽ được lưu
+MODEL_SAVE_PATH = '../pretrained_models/best_siamese_model_from_visdrone.pth' 
 
 # Siêu tham số cho training
 IMG_SIZE = 128
 EPOCHS = 50
 BATCH_SIZE = 32
-LR = 1e-4      # Learning rate nhỏ cho fine-tuning
-GAMMA = 0.7    # Tỉ lệ giảm LR của scheduler
-MARGIN = 1.0   # Margin cho Triplet Loss
-NUM_WORKERS = 4 if os.name == 'posix' else 0 # Tăng tốc độ load data trên Linux
+# QUAN TRỌNG: Learning rate NHỎ vì đây là fine-tuning
+LR = 1e-4      
+GAMMA = 0.7    
+MARGIN = 1.0   
+NUM_WORKERS = 4 if os.name == 'posix' else 0
 
 # --- 1. Data Augmentation và DataLoader ---
-# Các phép biến đổi mạnh mẽ cho training data để tăng khả năng khái quát hóa
+# (Phần này giữ nguyên, không cần thay đổi)
 train_transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.RandomHorizontalFlip(),
@@ -35,8 +40,6 @@ train_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
-
-# Các phép biến đổi đơn giản cho validation data
 val_transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor(),
@@ -44,37 +47,32 @@ val_transform = transforms.Compose([
 ])
 
 print("--- Preparing Datasets ---")
-# Tạo dataset với transform cho training
 full_dataset = SiameseTripletDataset(data_dir=PROCESSED_DATA_DIR, transform=train_transform)
-
-# Chia train/val
 train_size = int(0.85 * len(full_dataset))
 val_size = len(full_dataset) - train_size
 train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-
-# Ghi đè transform của validation dataset
 val_dataset.dataset.transform = val_transform
-
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
 # --- 2. Model, Loss, Optimizer, Scheduler ---
 print(f"--- Using device: {DEVICE} ---")
-print("--- Initializing Model ---")
-# Khởi tạo model với trọng số ImageNet, fine-tune toàn bộ mạng
-# Model được import từ siamese_network.py, file này đã được cập nhật lên MobileNetV3
-model = SiameseNetwork(pretrained=True, freeze_backbone=False).to(DEVICE)
+print("--- Initializing Model for Fine-tuning ---")
+
+# --- THAY ĐỔI CÁCH KHỞI TẠO MODEL ---
+# Truyền đường dẫn của VisDrone backbone vào đây
+model = SiameseNetwork(backbone_path=VISDRONE_BACKBONE_PATH, freeze_backbone=False).to(DEVICE)
 
 criterion = TripletLoss(margin=MARGIN)
 optimizer = optim.Adam(model.parameters(), lr=LR)
 scheduler = StepLR(optimizer, step_size=10, gamma=GAMMA)
 
 # --- 3. Vòng lặp Training & Validation ---
+# (Phần này giữ nguyên, không cần thay đổi)
 best_val_loss = float('inf')
-print("--- Starting Training ---")
+print("--- Starting Fine-tuning on Rescue Dataset ---")
 
 for epoch in range(EPOCHS):
-    # --- Training phase ---
     model.train()
     train_loss = 0.0
     pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS} [Train]")
@@ -92,7 +90,6 @@ for epoch in range(EPOCHS):
         
     avg_train_loss = train_loss / len(train_loader)
 
-    # --- Validation phase ---
     model.eval()
     val_loss = 0.0
     with torch.no_grad():
@@ -109,7 +106,6 @@ for epoch in range(EPOCHS):
 
     scheduler.step()
 
-    # Lưu lại model có validation loss tốt nhất
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
         torch.save(model.state_dict(), MODEL_SAVE_PATH)
