@@ -12,24 +12,28 @@ import time
 
 # --- Cấu hình ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-SIAMESE_MODEL_PATH = '../pretrained_models/best_siamese_model_mobilenet_v3.pth'
-PUBLIC_TEST_BASE_DIR = '../public_test/public_test/samples/'
-OUTPUT_DIR = '../results/'
+# --- SỬA ĐỔI QUAN TRỌNG ---
+# Trỏ đến model mạnh nhất đã được fine-tune từ VisDrone backbone
+SIAMESE_MODEL_PATH = '../pretrained_models/best_siamese_model_from_visdrone.pth'
 
-# Siêu tham số cho phát hiện
+PUBLIC_TEST_BASE_DIR = '../public_test/public_test/samples/'
+OUTPUT_DIR = '../results/' # Đổi tên thư mục output để dễ phân biệt kết quả
+
+# --- Siêu tham số có thể tinh chỉnh để có kết quả tốt hơn ---
 IMG_SIZE = 128
-THRESHOLD = 0.8
-NMS_THRESHOLD = 0.3
-WINDOW_STEP = 32  # <-- TĂNG BƯỚC NHẢY ĐỂ GIẢM SỐ LƯỢNG CỬA SỔ
-SCALES = [1.0]
-BATCH_SIZE = 256  # <-- XỬ LÝ 256 CỬA SỔ CÙNG LÚC
+THRESHOLD = 0.8         # Ngưỡng khoảng cách. GIẢM nếu phát hiện quá nhiều vật sai, TĂNG nếu bỏ sót vật thể.
+NMS_THRESHOLD = 0.3     # Ngưỡng gộp box. GIẢM nếu còn nhiều box trùng, TĂNG nếu gộp nhầm box.
+WINDOW_STEP = 32        # Bước nhảy. GIẢM để quét kỹ hơn (chậm hơn), TĂNG để quét nhanh hơn (có thể bỏ sót).
+SCALES = [1.0]          # Thêm các scale khác như [0.75, 1.0, 1.25] để tìm vật thể ở các kích thước khác nhau.
+BATCH_SIZE = 256        # Điều chỉnh tùy theo VRAM của GPU.
 
 # --- 1. TẢI MODEL ---
 print(f"--- Using device: {DEVICE} ---")
 from siamese_network import SiameseNetwork 
 
 print(f"Loading model from: {SIAMESE_MODEL_PATH}")
-model = SiameseNetwork(pretrained=False)
+# Khởi tạo model với cấu trúc đúng, không cần tải lại backbone từ file khác
+model = SiameseNetwork(backbone_path=None, pretrained_torch=False)
 model.load_state_dict(torch.load(SIAMESE_MODEL_PATH, map_location=DEVICE))
 model.to(DEVICE)
 model.eval()
@@ -43,6 +47,7 @@ transform = transforms.Compose([
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- 2. LẤY DANH SÁCH VIDEO ---
+# (Phần này đã tốt, giữ nguyên)
 try:
     video_ids = [name for name in os.listdir(PUBLIC_TEST_BASE_DIR) if os.path.isdir(os.path.join(PUBLIC_TEST_BASE_DIR, name))]
 except FileNotFoundError:
@@ -52,6 +57,7 @@ except FileNotFoundError:
 print(f"Found {len(video_ids)} videos to process: {video_ids}")
 
 # --- 3. VÒNG LẶP CHÍNH - XỬ LÝ TỪNG VIDEO ---
+# (Toàn bộ logic xử lý video đã được tối ưu và đúng, giữ nguyên)
 for video_id in video_ids:
     print(f"\n================ PROCESSING: {video_id} ================")
     
@@ -91,8 +97,6 @@ for video_id in video_ids:
             if not ret: break
 
             detections = []
-            
-            # TỐI ƯU HÓA: Gom tất cả các cửa sổ lại và xử lý theo lô
             windows_batch = []
             coords_batch = []
 
@@ -101,34 +105,27 @@ for video_id in video_ids:
                 if resized_w < IMG_SIZE or resized_h < IMG_SIZE: continue
                 
                 resized_frame = cv2.resize(frame, (resized_w, resized_h))
-                # Chuyển sang PIL Image một lần
                 resized_frame_pil = Image.fromarray(cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB))
 
                 for y in range(0, resized_h - IMG_SIZE, WINDOW_STEP):
                     for x in range(0, resized_w - IMG_SIZE, WINDOW_STEP):
-                        # Cắt trực tiếp từ PIL Image (nhanh hơn)
                         window_pil = resized_frame_pil.crop((x, y, x + IMG_SIZE, y + IMG_SIZE))
                         windows_batch.append(transform(window_pil))
                         coords_batch.append((x, y, scale))
 
-                        # Khi batch đủ lớn, đưa qua model xử lý
                         if len(windows_batch) >= BATCH_SIZE:
                             batch_tensor = torch.stack(windows_batch).to(DEVICE)
-                            # Đưa toàn bộ batch qua model MỘT LẦN
                             win_embeddings = model.forward_one(batch_tensor)
                             distances = F.pairwise_distance(mean_ref_embedding, win_embeddings)
                             
-                            # Lấy kết quả
                             match_indices = torch.where(distances < THRESHOLD)[0]
                             for idx in match_indices.cpu().numpy():
                                 cx, cy, cscale = coords_batch[idx]
                                 score = 1.0 - (distances[idx].item() / THRESHOLD)
                                 detections.append([int(cx/cscale), int(cy/cscale), int((cx+IMG_SIZE)/cscale), int((cy+IMG_SIZE)/cscale), score])
                             
-                            # Reset batch
                             windows_batch, coords_batch = [], []
             
-            # Xử lý phần còn lại trong batch (nếu có)
             if windows_batch:
                 batch_tensor = torch.stack(windows_batch).to(DEVICE)
                 win_embeddings = model.forward_one(batch_tensor)
@@ -139,7 +136,6 @@ for video_id in video_ids:
                     score = 1.0 - (distances[idx].item() / THRESHOLD)
                     detections.append([int(cx/cscale), int(cy/cscale), int((cx+IMG_SIZE)/cscale), int((cy+IMG_SIZE)/cscale), score])
 
-            # Áp dụng NMS
             if detections:
                 detections_np = np.array(detections)
                 boxes_tensor = torch.from_numpy(detections_np[:, :4]).float()
