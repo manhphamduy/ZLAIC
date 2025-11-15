@@ -15,7 +15,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # --- THAY ĐỔI QUAN TRỌNG NHẤT ---
 # Đường dẫn đến model TỐT NHẤT đã được fine-tune từ VisDrone backbone
-SIAMESE_MODEL_PATH = '../pre-trained_models/best_siamese_model_from_visdrone.pth'
+SIAMESE_MODEL_PATH = '../pretrained_models/best_siamese_model_from_visdrone.pth'
 
 # Đường dẫn đến thư mục chứa tất cả video test
 PUBLIC_TEST_BASE_DIR = '../public_test/public_test/samples/'
