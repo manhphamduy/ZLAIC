@@ -8,16 +8,19 @@ from torchvision.ops import nms
 import os
 import glob
 from tqdm import tqdm
-import json # Thư viện để làm việc với JSON
+import json
 
 # --- Cấu hình ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# Đường dẫn đến model đã train (sử dụng MobileNetV3)
-SIAMESE_MODEL_PATH = '../pretrained_models/best_siamese_model_mobilenet_v3.pth'
+
+# --- THAY ĐỔI QUAN TRỌNG NHẤT ---
+# Đường dẫn đến model TỐT NHẤT đã được fine-tune từ VisDrone backbone
+SIAMESE_MODEL_PATH = '../pre-trained_models/best_siamese_model_from_visdrone.pth'
+
 # Đường dẫn đến thư mục chứa tất cả video test
 PUBLIC_TEST_BASE_DIR = '../public_test/public_test/samples/'
 # Tên file JSON output để nộp bài
-OUTPUT_JSON_PATH = '../results/submission.json'
+OUTPUT_JSON_PATH = '../submission.json'
 
 # Siêu tham số cho phát hiện (CẦN TINH CHỈNH KỸ LƯỠNG)
 IMG_SIZE = 128
@@ -28,10 +31,12 @@ BATCH_SIZE = 256       # Số cửa sổ xử lý cùng lúc trên GPU
 
 # --- 1. TẢI MODEL (Chỉ tải một lần duy nhất) ---
 print(f"--- Using device: {DEVICE} ---")
+# Import class SiameseNetwork từ file siamese_network.py
 from siamese_network import SiameseNetwork 
 
 print(f"Loading model from: {SIAMESE_MODEL_PATH}")
-model = SiameseNetwork(pretrained=False)
+# Khởi tạo model với cấu trúc đúng (không cần tải pre-trained weights từ file khác nữa)
+model = SiameseNetwork(backbone_path=None, pretrained_torch=False)
 model.load_state_dict(torch.load(SIAMESE_MODEL_PATH, map_location=DEVICE))
 model.to(DEVICE)
 model.eval()
@@ -53,6 +58,7 @@ print(f"Found {len(video_ids)} videos to process: {video_ids}")
 all_results = [] # Danh sách chứa kết quả cuối cùng của tất cả video
 
 # --- 3. VÒNG LẶP CHÍNH - XỬ LÝ TỪNG VIDEO ---
+# (Toàn bộ phần logic xử lý video bên dưới được giữ nguyên vì đã tối ưu)
 for video_id in video_ids:
     print(f"\n================ PROCESSING: {video_id} ================")
     
@@ -62,7 +68,6 @@ for video_id in video_ids:
     
     if not (os.path.isdir(reference_img_dir) and os.path.isfile(search_video_path)):
         print(f"Warning: Necessary files not found for {video_id}. Skipping.")
-        # Thêm một kết quả rỗng cho video này để đảm bảo file submission có đủ video_id
         all_results.append({"video_id": video_id, "annotations": [{"bboxes": []}]})
         continue
 
@@ -82,7 +87,6 @@ for video_id in video_ids:
     cap = cv2.VideoCapture(search_video_path)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Chuẩn bị cấu trúc để lưu kết quả cho video này
     video_annotations = {"bboxes": []}
     current_frame_idx = 0
     
@@ -136,14 +140,10 @@ for video_id in video_ids:
                 indices = nms(boxes_tensor, scores_tensor, NMS_THRESHOLD)
                 final_boxes = boxes_tensor[indices].numpy().astype(int)
                 
-                # Chuyển các box tìm được sang định dạng JSON yêu cầu
                 for (x1, y1, x2, y2) in final_boxes:
                     bbox_dict = {
-                        "frame": current_frame_idx,
-                        "x1": int(x1),
-                        "y1": int(y1),
-                        "x2": int(x2),
-                        "y2": int(y2)
+                        "frame": current_frame_idx, "x1": int(x1), "y1": int(y1),
+                        "x2": int(x2), "y2": int(y2)
                     }
                     video_annotations["bboxes"].append(bbox_dict)
 
@@ -153,10 +153,8 @@ for video_id in video_ids:
     pbar.close()
     cap.release()
     
-    # Đóng gói kết quả của video này vào cấu trúc cuối cùng
     video_result_object = {
-        "video_id": video_id,
-        "annotations": [video_annotations] # annotations là một list chứa 1 object
+        "video_id": video_id, "annotations": [video_annotations]
     }
     all_results.append(video_result_object)
     print(f"--- Finished {video_id}. Found {len(video_annotations['bboxes'])} bounding boxes. ---")
@@ -165,6 +163,6 @@ for video_id in video_ids:
 # --- 4. LƯU KẾT QUẢ CUỐI CÙNG RA FILE JSON ---
 print("\n================ SAVING FINAL SUBMISSION FILE ================")
 with open(OUTPUT_JSON_PATH, 'w') as f:
-    json.dump(all_results, f, indent=4) # indent=4 để file JSON dễ đọc (tùy chọn)
+    json.dump(all_results, f, indent=4)
 
 print(f"Successfully created submission file at: {OUTPUT_JSON_PATH}")
